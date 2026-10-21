@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ChargeFlow – EV Charging Queue and Power Allocation</title>
+<style>
+:root{--bg:#f4f8f7;--card:#fff;--ink:#0b1d26;--mut:#5c6f7b;--g:#1db682;--r:#e5484d;--a:#ffb703;--b:#2e86aa;--line:#d5e3e0}
+@media(prefers-color-scheme:dark){:root{--bg:#0b1d26;--card:#12333f;--ink:#f4f8f7;--mut:#9fb4bd;--line:#244955}}
+*{box-sizing:border-box}body{margin:0;font:14px/1.4 Calibri,Arial,sans-serif;background:var(--bg);color:var(--ink)}
+header{padding:16px 20px}h1{margin:0;font-size:24px}header p{margin:2px 0 0;color:var(--mut)}
+main{padding:0 20px 24px;display:grid;gap:14px;max-width:1150px;margin:auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:end}label{display:flex;flex-direction:column;font-size:12px;color:var(--mut);gap:3px}
+input,select,button{font:inherit;padding:6px 8px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--ink)}input{width:90px}
+button{background:var(--g);color:#fff;border:0;font-weight:700;cursor:pointer}button.alt{background:var(--b)}
+table{border-collapse:collapse;width:100%}th,td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--line)}th{font-size:12px;color:var(--mut)}
+.chip{padding:2px 9px;border-radius:99px;color:#fff;font-size:12px;font-weight:700;white-space:nowrap}
+.win{color:var(--g);font-weight:700}.err{color:var(--r);font-weight:700}.note{color:var(--mut);font-size:12px}
+canvas{width:100%;height:260px}.wrap{overflow-x:auto}
+</style></head><body>
+<header><h1>ChargeFlow</h1><p>Deadline-aware EV charging queue and power allocation. Simulated data, never exceeds the station limit.</p></header>
+<main>
+<section class="card"><div class="row">
+ <label>Vehicles<input id="n" type="number" value="20" min="1" max="60"></label>
+ <label>Scenario seed<input id="seed" type="number" value="3"></label>
+ <label>Charging points<input id="pts" type="number" value="6" min="1" max="20"></label>
+ <label>kW per point<input id="pmax" type="number" value="22"></label>
+ <label>Station limit (kW)<input id="base" type="number" value="50"></label>
+ <label>Power drop 12:00–14:00<select id="drop"><option value="0.5">to 50 %</option><option value="1">none</option><option value="0.3">to 30 %</option></select></label>
+ <button id="go">Run simulation</button><button id="bench" class="alt">Benchmark 50 scenarios</button>
+</div><p id="bout" class="note"></p></section>
+
+<section class="card"><b>Add a vehicle request</b>
+<div class="row"><label>Capacity (kWh)<input id="vc" type="number" value="40"></label><label>Current %<input id="vs" type="number" value="20"></label><label>Target %<input id="vt" type="number" value="90"></label>
+<label>Arrival (min from 08:00)<input id="va" type="number" value="150"></label><label>Departure (min from 08:00)<input id="vd" type="number" value="270"></label><label>Max kW<input id="vr" type="number" value="11"></label>
+<button id="add" class="alt">Add &amp; rerun</button><button id="clr" class="alt">Clear added</button></div><p id="verr" class="err"></p></section>
+
+<section class="card"><b>Comparison on the same input (computed by the simulation)</b><div class="wrap"><table id="cmp"></table></div></section>
+
+<section class="card"><b>Station power vs limit</b> <span class="note">green: ChargeFlow · grey: FCFS · red: limit</span><canvas id="cv" width="1100" height="260"></canvas>
+<label>Time <input id="tm" type="range" min="0" max="719" value="260" style="width:100%"></label><div id="clock" class="note"></div></section>
+
+<section class="card"><b>Vehicles at selected time (ChargeFlow)</b><div class="wrap"><table id="veh"></table></div></section>
+<p class="note">Assumptions: constant charging efficiency, constant power within a minute, simulated data (vehicle IDs only). A scheduling tool, not certified electrical protection. Estimates are model output, not guarantees.</p>
+</main>
+<script src="engine.js"></script>
+<script>
+const $=id=>document.getElementById(id),hm=m=>String(8+Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0');
+const COL={Charging:'#1db682','Power-reduced':'#ffb703',Waiting:'#5c6f7b',Completed:'#2e86aa',Departed:'#e5484d','Not arrived':'#9aa7ad'};
+let extra=[],A,B;
+function cfg(){return{points:+$('pts').value,pmax:+$('pmax').value,base:+$('base').value,dropFactor:+$('drop').value}}
+function go(){
+  const n=Math.max(1,Math.min(60,+$('n').value||20));
+  const L=CF.makeScenario(+$('seed').value||0,n).concat(extra);
+  B=CF.run(L,'fcfs',cfg());A=CF.run(L,'smart',cfg());render();
+}
+function render(){
+  const a=A.metrics,b=B.metrics,rows=[['Completed before departure (%)','done',1],['Average wait (min)','wait',0],['Charger utilization (%)','util',1],['Total energy delivered (kWh)','energy',1],['Peak power demand (kW)','peak',0],['Vehicles that got charge','served',1],['Limit violations','violations',0]];
+  $('cmp').innerHTML='<tr><th>Metric</th><th>FCFS</th><th>ChargeFlow</th></tr>'+rows.map(([l,k,hi])=>{const w=hi?a[k]>b[k]+.05:a[k]<b[k]-.05;return`<tr><td>${l}</td><td>${b[k].toFixed(1)}</td><td class="${w?'win':''}">${a[k].toFixed(1)}</td></tr>`}).join('');
+  draw();show();
+}
+function draw(){
+  const c=$('cv'),x=c.getContext('2d'),W=c.width,H=c.height,mx=Math.max(...A.series.map(p=>p.limit))*1.15,X=t=>t/719*(W-50)+40,Y=v=>H-25-v/mx*(H-40);
+  x.clearRect(0,0,W,H);x.font='12px sans-serif';x.fillStyle='#8a9aa3';x.strokeStyle='#8a9aa3';
+  for(let k=0;k<=mx;k+=10){x.fillText(k,5,Y(k)+4);x.globalAlpha=.2;x.beginPath();x.moveTo(40,Y(k));x.lineTo(W-10,Y(k));x.stroke();x.globalAlpha=1}
+  for(let t=0;t<=720;t+=120)x.fillText(hm(t),X(Math.min(t,719))-15,H-6);
+  const line=(s,key,col,w)=>{x.beginPath();x.strokeStyle=col;x.lineWidth=w;s.forEach((p,i)=>i?x.lineTo(X(p.t),Y(p[key])):x.moveTo(X(p.t),Y(p[key])));x.stroke()};
+  line(B.series,'kw','#9aa7ad',2);line(A.series,'kw','#1db682',3);line(A.series,'limit','#e5484d',2);
+  const t=+$('tm').value;x.strokeStyle='#2e86aa';x.lineWidth=1;x.beginPath();x.moveTo(X(t),10);x.lineTo(X(t),H-25);x.stroke();
+}
+function show(){
+  const t=+$('tm').value,S=A.snaps[t],p=A.series[t];$('clock').textContent=`${hm(t)} · station draw ${p.kw.toFixed(1)} kW of ${p.limit} kW limit`;
+  $('veh').innerHTML='<tr><th>Vehicle</th><th>Stay</th><th>Need (kWh)</th><th>Status</th><th>kW</th><th>Battery</th><th>Why</th></tr>'+A.vehicles.map((v,i)=>{const s=S[i];
+   return`<tr><td>${v.id}</td><td>${hm(v.arr)}–${hm(v.dep)}</td><td>${v.E.toFixed(1)}</td><td><span class="chip" style="background:${COL[s.st]}">${s.st}</span></td><td>${s.kw.toFixed(1)}</td><td>${s.soc.toFixed(0)}% → ${v.t}%</td><td>${s.why}</td></tr>`}).join('');
+  draw();
+}
+$('go').onclick=go;$('tm').oninput=show;
+$('add').onclick=()=>{
+  const v={id:'EV-X'+(extra.length+1),cap:+$('vc').value,s:+$('vs').value,t:+$('vt').value,arr:+$('va').value,dep:+$('vd').value,rate:+$('vr').value},e=CF.validate(v);
+  if(e.length){$('verr').textContent=e.join(' · ');return}$('verr').textContent='';extra.push(v);go();
+};
+$('clr').onclick=()=>{extra=[];$('verr').textContent='';go()};
+$('bench').onclick=()=>{const m=CF.benchmark(50,+$('n').value||20,cfg());$('bout').textContent=`Mean of 50 random scenarios: ${m.fcfs.toFixed(1)}% (FCFS) vs ${m.smart.toFixed(1)}% (ChargeFlow) completed before departure; average wait ${m.fw.toFixed(1)} vs ${m.sw.toFixed(1)} min.`};
+go();
+</script></body></html>
